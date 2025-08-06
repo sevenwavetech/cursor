@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'screens/dashboard_screen.dart';
-import 'screens/calendar_screen.dart';
 import 'screens/settings_screen.dart';
 import 'utils/constants.dart';
 
@@ -88,7 +87,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   final List<Widget> _screens = [
     const DashboardScreen(),
-    const CalendarScreen(),
     const SettingsScreen(),
   ];
 
@@ -97,11 +95,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       icon: Icon(Icons.dashboard_outlined),
       selectedIcon: Icon(Icons.dashboard),
       label: 'Dashboard',
-    ),
-    const NavigationDestination(
-      icon: Icon(Icons.calendar_today_outlined),
-      selectedIcon: Icon(Icons.calendar_today),
-      label: 'Calendar',
     ),
     const NavigationDestination(
       icon: Icon(Icons.settings_outlined),
@@ -113,7 +106,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 2, vsync: this);
     _tabController.addListener(() {
       if (_tabController.indexIsChanging) {
         setState(() {
@@ -141,7 +134,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     return Scaffold(
       body: TabBarView(
         controller: _tabController,
-        physics: const NeverScrollableScrollPhysics(), // Disable swipe navigation
+        physics: const NeverScrollableScrollPhysics(),
         children: _screens,
       ),
       bottomNavigationBar: NavigationBar(
@@ -153,60 +146,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         indicatorColor: Theme.of(context).colorScheme.primaryContainer,
         animationDuration: AppConstants.mediumAnimation,
       ),
-    );
-  }
-}
-
-// Alternative iOS-style navigation for Cupertino design
-class CupertinoMainScreen extends StatefulWidget {
-  const CupertinoMainScreen({super.key});
-
-  @override
-  State<CupertinoMainScreen> createState() => _CupertinoMainScreenState();
-}
-
-class _CupertinoMainScreenState extends State<CupertinoMainScreen> {
-  int _currentIndex = 0;
-
-  final List<Widget> _screens = [
-    const DashboardScreen(),
-    const CalendarScreen(),
-    const SettingsScreen(),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return CupertinoTabScaffold(
-      tabBar: CupertinoTabBar(
-        currentIndex: _currentIndex,
-        onTap: (index) {
-          setState(() {
-            _currentIndex = index;
-          });
-        },
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(CupertinoIcons.square_grid_2x2),
-            activeIcon: Icon(CupertinoIcons.square_grid_2x2_fill),
-            label: 'Dashboard',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(CupertinoIcons.calendar),
-            activeIcon: Icon(CupertinoIcons.calendar_today),
-            label: 'Calendar',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(CupertinoIcons.settings),
-            activeIcon: Icon(CupertinoIcons.settings_solid),
-            label: 'Settings',
-          ),
-        ],
-      ),
-      tabBuilder: (context, index) {
-        return CupertinoTabView(
-          builder: (context) => _screens[index],
-        );
-      },
     );
   }
 }
