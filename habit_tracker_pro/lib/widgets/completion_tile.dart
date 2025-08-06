@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
-import '../utils/constants.dart';
+import 'package:flutter/services.dart';
+import '../utils/design_system.dart';
 
+/// Completion tile widget following the design system specifications
+/// 32pt x 32pt with 6pt border radius, bounce animation on tap
 class CompletionTile extends StatefulWidget {
   final bool isCompleted;
   final Color habitColor;
@@ -12,7 +15,7 @@ class CompletionTile extends StatefulWidget {
     required this.isCompleted,
     required this.habitColor,
     required this.onTap,
-    this.size = AppConstants.tileSize,
+    this.size = DesignSystem.tileSize,
   });
 
   @override
@@ -28,7 +31,7 @@ class _CompletionTileState extends State<CompletionTile>
   void initState() {
     super.initState();
     _animationController = AnimationController(
-      duration: AppConstants.shortAnimation,
+      duration: DesignSystem.animationFast,
       vsync: this,
     );
     
@@ -48,7 +51,10 @@ class _CompletionTileState extends State<CompletionTile>
   }
 
   Future<void> _handleTap() async {
-    // Play tap animation
+    // Haptic feedback
+    HapticFeedback.lightImpact();
+    
+    // Play tap animation (scale to 0.8 then back to 1.0 with bounce)
     await _animationController.forward();
     await _animationController.reverse();
     
@@ -69,6 +75,8 @@ class _CompletionTileState extends State<CompletionTile>
               width: widget.size,
               height: widget.size,
               decoration: BoxDecoration(
+                // Completed: solid fill with habit color
+                // Empty: transparent fill with 2pt border in habit color
                 color: widget.isCompleted 
                     ? widget.habitColor 
                     : Colors.transparent,
@@ -78,9 +86,7 @@ class _CompletionTileState extends State<CompletionTile>
                         color: widget.habitColor,
                         width: 2.0,
                       ),
-                borderRadius: BorderRadius.circular(
-                  AppConstants.smallBorderRadius / 2,
-                ),
+                borderRadius: BorderRadius.circular(DesignSystem.tileBorderRadius),
               ),
               child: widget.isCompleted
                   ? Icon(
@@ -97,151 +103,176 @@ class _CompletionTileState extends State<CompletionTile>
   }
 }
 
-class TodayCompletionTiles extends StatelessWidget {
-  final List<Map<String, dynamic>> habits;
-  final Function(int habitId) onHabitToggle;
+/// Habit card widget following the design system specifications
+/// 80pt height with habit icon, name, streak info, and completion tile
+class HabitCard extends StatelessWidget {
+  final Map<String, dynamic> habitData;
+  final VoidCallback onTap;
+  final VoidCallback? onEdit;
+  final VoidCallback? onArchive;
+  final int streak;
 
-  const TodayCompletionTiles({
+  const HabitCard({
     super.key,
-    required this.habits,
-    required this.onHabitToggle,
+    required this.habitData,
+    required this.onTap,
+    this.onEdit,
+    this.onArchive,
+    this.streak = 0,
   });
 
   @override
   Widget build(BuildContext context) {
-    if (habits.isEmpty) {
-      return Card(
-        child: Padding(
-          padding: const EdgeInsets.all(AppConstants.defaultPadding),
-          child: Column(
-            children: [
-              Icon(
-                Icons.track_changes,
-                size: 48,
-                color: Colors.grey[400],
-              ),
-              const SizedBox(height: AppConstants.smallPadding),
-              Text(
-                'No habits yet',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: Colors.grey[600],
-                ),
-              ),
-              Text(
-                'Create your first habit to get started',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Colors.grey[500],
-                ),
-              ),
-            ],
-          ),
+    final habitColor = DesignSystem.getHabitColor(habitData['color']);
+    final isCompleted = habitData['is_completed'] == 1;
+    
+    return Dismissible(
+      key: Key('habit_${habitData['id']}'),
+      background: _buildSwipeBackground(
+        color: DesignSystem.primary,
+        icon: Icons.edit,
+        label: 'Edit',
+        alignment: Alignment.centerLeft,
+      ),
+      secondaryBackground: _buildSwipeBackground(
+        color: DesignSystem.warning,
+        icon: Icons.archive,
+        label: 'Archive',
+        alignment: Alignment.centerRight,
+      ),
+      confirmDismiss: (direction) async {
+        if (direction == DismissDirection.startToEnd) {
+          onEdit?.call();
+        } else if (direction == DismissDirection.endToStart) {
+          onArchive?.call();
+        }
+        return false; // Don't actually dismiss
+      },
+      child: Container(
+        height: DesignSystem.cardHeight,
+        margin: EdgeInsets.symmetric(
+          horizontal: DesignSystem.screenMargin,
+          vertical: DesignSystem.spacingSmall / 2,
         ),
-      );
-    }
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppConstants.defaultPadding),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        padding: EdgeInsets.all(DesignSystem.spacingMedium),
+        decoration: BoxDecoration(
+          color: context.surfaceColor,
+          borderRadius: BorderRadius.circular(DesignSystem.cardBorderRadius),
+        ),
+        child: Row(
           children: [
-            Row(
-              children: [
-                Icon(
-                  Icons.today,
-                  color: Theme.of(context).colorScheme.primary,
-                  size: 20,
-                ),
-                const SizedBox(width: AppConstants.smallPadding),
-                Text(
-                  'Today\'s Progress',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
+            // Left: Habit icon (40pt circle with habit color)
+            Container(
+              width: DesignSystem.habitIconSize,
+              height: DesignSystem.habitIconSize,
+              decoration: BoxDecoration(
+                color: habitColor,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                _getHabitIcon(habitData['icon']),
+                color: Colors.white,
+                size: 24,
+              ),
+            ),
+            
+            SizedBox(width: DesignSystem.spacingMedium),
+            
+            // Middle: Habit name, streak info, weekly progress
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // Habit name (18pt semibold)
+                  Text(
+                    habitData['name'],
+                    style: DesignSystem.headline.copyWith(
+                      color: context.textColor,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppConstants.defaultPadding),
-            
-            // Tiles grid
-            Wrap(
-              spacing: AppConstants.smallPadding,
-              runSpacing: AppConstants.smallPadding,
-              children: habits.map((habitData) {
-                final habitColor = AppConstants.getColorByName(habitData['color']);
-                final isCompleted = habitData['is_completed'] == 1;
-                
-                return Column(
-                  children: [
-                    CompletionTile(
-                      isCompleted: isCompleted,
-                      habitColor: habitColor,
-                      onTap: () => onHabitToggle(habitData['id']),
+                  
+                  SizedBox(height: DesignSystem.spacingMicro),
+                  
+                  // Streak info (14pt regular)
+                  Text(
+                    streak > 0 ? '$streak day streak' : 'No streak yet',
+                    style: DesignSystem.body.copyWith(
+                      fontSize: 14,
+                      color: streak > 0 
+                          ? DesignSystem.success 
+                          : context.secondaryTextColor,
                     ),
-                    const SizedBox(height: 4),
-                    SizedBox(
-                      width: AppConstants.tileSize,
-                      child: Text(
-                        habitData['name'],
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          fontSize: 10,
-                        ),
-                        textAlign: TextAlign.center,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                );
-              }).toList(),
+                  ),
+                ],
+              ),
             ),
             
-            const SizedBox(height: AppConstants.defaultPadding),
+            SizedBox(width: DesignSystem.spacingMedium),
             
-            // Progress summary
-            _buildProgressSummary(context),
+            // Right: Today's completion tile (32pt square, tappable)
+            CompletionTile(
+              isCompleted: isCompleted,
+              habitColor: habitColor,
+              onTap: onTap,
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildProgressSummary(BuildContext context) {
-    final completedCount = habits.where((h) => h['is_completed'] == 1).length;
-    final totalCount = habits.length;
-    final percentage = totalCount > 0 ? (completedCount / totalCount) * 100 : 0.0;
-
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(
-          '$completedCount of $totalCount completed',
-          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-            fontWeight: FontWeight.w500,
+  Widget _buildSwipeBackground({
+    required Color color,
+    required IconData icon,
+    required String label,
+    required Alignment alignment,
+  }) {
+    return Container(
+      margin: EdgeInsets.symmetric(
+        horizontal: DesignSystem.screenMargin,
+        vertical: DesignSystem.spacingSmall / 2,
+      ),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(DesignSystem.cardBorderRadius),
+      ),
+      child: Align(
+        alignment: alignment,
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: DesignSystem.spacingLarge),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: Colors.white, size: 24),
+              SizedBox(height: DesignSystem.spacingMicro),
+              Text(
+                label,
+                style: DesignSystem.caption.copyWith(color: Colors.white),
+              ),
+            ],
           ),
         ),
-        Container(
-          padding: const EdgeInsets.symmetric(
-            horizontal: AppConstants.smallPadding,
-            vertical: 4,
-          ),
-          decoration: BoxDecoration(
-            color: percentage == 100 
-                ? Colors.green.withOpacity(0.1)
-                : Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3),
-            borderRadius: BorderRadius.circular(AppConstants.smallBorderRadius),
-          ),
-          child: Text(
-            '${percentage.round()}%',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: percentage == 100 
-                  ? Colors.green[700]
-                  : Theme.of(context).colorScheme.primary,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
-      ],
+      ),
     );
+  }
+
+  IconData _getHabitIcon(String iconName) {
+    // Map icon names to actual icons
+    switch (iconName) {
+      case 'fitness_center': return Icons.fitness_center;
+      case 'local_drink': return Icons.local_drink;
+      case 'book': return Icons.book;
+      case 'bedtime': return Icons.bedtime;
+      case 'directions_run': return Icons.directions_run;
+      case 'self_improvement': return Icons.self_improvement;
+      case 'music_note': return Icons.music_note;
+      case 'palette': return Icons.palette;
+      case 'work': return Icons.work;
+      case 'school': return Icons.school;
+      default: return Icons.track_changes;
+    }
   }
 }

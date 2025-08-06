@@ -217,7 +217,6 @@ class DatabaseHelper {
 
   /// Calculate current streak for a habit
   Future<int> getStreakForHabit(int habitId) async {
-    final db = await database;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     

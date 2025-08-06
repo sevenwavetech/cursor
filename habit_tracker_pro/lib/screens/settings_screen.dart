@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
+import '../models/habit.dart';
 import '../services/database_helper.dart';
-import '../utils/constants.dart';
+import '../utils/design_system.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -11,30 +12,34 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final DatabaseHelper _databaseHelper = DatabaseHelper();
-  int _totalHabits = 0;
-  int _totalEntries = 0;
+  Map<String, dynamic> _stats = {};
+  List<Habit> _archivedHabits = [];
   bool _isLoading = true;
+  ThemeMode _themeMode = ThemeMode.system;
 
   @override
   void initState() {
     super.initState();
-    _loadStats();
+    _loadData();
   }
 
-  Future<void> _loadStats() async {
+  Future<void> _loadData() async {
+    setState(() {
+      _isLoading = true;
+    });
+
     try {
-      final habits = await _databaseHelper.getAllHabits();
-      int totalEntries = 0;
+      // Load overall statistics
+      final stats = await _databaseHelper.getOverallStats();
       
-      for (final habit in habits) {
-        final entries = await _databaseHelper.getHabitEntries(habit.id!);
-        totalEntries += entries.length;
-      }
+      // Load archived habits
+      final allHabits = await _databaseHelper.getAllHabits(includeArchived: true);
+      final archivedHabits = allHabits.where((h) => h.isArchived).toList();
 
       if (mounted) {
         setState(() {
-          _totalHabits = habits.length;
-          _totalEntries = totalEntries;
+          _stats = stats;
+          _archivedHabits = archivedHabits;
           _isLoading = false;
         });
       }
@@ -43,55 +48,62 @@ class _SettingsScreenState extends State<SettingsScreen> {
         setState(() {
           _isLoading = false;
         });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error loading settings: $e')),
+        );
       }
     }
   }
 
-  Future<void> _showAboutDialog() async {
-    showAboutDialog(
-      context: context,
-      applicationName: AppConstants.appName,
-      applicationVersion: AppConstants.appVersion,
-      applicationIcon: Container(
-        width: 64,
-        height: 64,
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.primary,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: const Icon(
-          Icons.track_changes,
-          color: Colors.white,
-          size: 32,
-        ),
-      ),
-      children: [
-        const Text(
-          'A comprehensive habit tracking app with tile-based progress visualization. '
-          'Build better habits and track your progress with beautiful, intuitive interfaces.',
-        ),
-        const SizedBox(height: 16),
-        const Text(
-          'Features:',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-        const Text('• Tile-based progress visualization'),
-        const Text('• Offline-first with local SQLite database'),
-        const Text('• Material Design 3 with iOS-style components'),
-        const Text('• Calendar view for habit tracking'),
-        const Text('• Detailed statistics and streak tracking'),
-      ],
-    );
+  Future<void> _restoreHabit(Habit habit) async {
+    try {
+      final updatedHabit = habit.copyWith(isArchived: false, updatedAt: DateTime.now());
+      await _databaseHelper.updateHabit(updatedHabit);
+      await _loadData();
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${habit.name} restored')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error restoring habit: $e')),
+        );
+      }
+    }
   }
 
-  Future<void> _showResetDataDialog() async {
-    final confirmed = await showDialog<bool>(
+  Future<void> _permanentlyDeleteHabit(Habit habit) async {
+    final confirmed = await _showDeleteConfirmation(habit.name);
+    if (confirmed == true) {
+      try {
+        await _databaseHelper.deleteHabit(habit.id!);
+        await _loadData();
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('${habit.name} permanently deleted')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error deleting habit: $e')),
+          );
+        }
+      }
+    }
+  }
+
+  Future<bool?> _showDeleteConfirmation(String habitName) {
+    return showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Reset All Data'),
-        content: const Text(
-          'This will permanently delete all your habits and progress data. '
-          'This action cannot be undone. Are you sure you want to continue?',
+        title: const Text('Delete Habit Permanently'),
+        content: Text(
+          'Are you sure you want to permanently delete "$habitName"? This will also delete all completion data. This action cannot be undone.',
         ),
         actions: [
           TextButton(
@@ -100,301 +112,356 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Reset All Data'),
+            style: TextButton.styleFrom(foregroundColor: DesignSystem.destructive),
+            child: const Text('Delete'),
           ),
         ],
       ),
     );
-
-    if (confirmed == true) {
-      await _resetAllData();
-    }
   }
 
-  Future<void> _resetAllData() async {
-    try {
-      // Close the database connection
-      await _databaseHelper.close();
-      
-      // Note: In a real app, you'd delete the database file here
-      // For now, we'll just show a message
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Data reset functionality would be implemented here'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error resetting data: $e')),
-        );
-      }
-    }
+  Future<void> _exportData() async {
+    // TODO: Implement data export functionality
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Data export coming soon!')),
+    );
+  }
+
+  Future<void> _importData() async {
+    // TODO: Implement data import functionality
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Data import coming soon!')),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: AppBar(
-        title: const Text(
+        title: Text(
           'Settings',
-          style: TextStyle(fontWeight: FontWeight.bold),
+          style: DesignSystem.largeTitle.copyWith(
+            color: context.textColor,
+            fontSize: 28, // Slightly smaller for app bar
+          ),
         ),
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(AppConstants.defaultPadding),
-        children: [
-          // App Statistics
-          _buildStatsSection(),
-          const SizedBox(height: AppConstants.largePadding),
-
-          // App Settings
-          _buildSettingsSection(),
-          const SizedBox(height: AppConstants.largePadding),
-
-          // Data Management
-          _buildDataSection(),
-          const SizedBox(height: AppConstants.largePadding),
-
-          // About
-          _buildAboutSection(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatsSection() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppConstants.defaultPadding),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  Icons.analytics,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(width: AppConstants.smallPadding),
-                Text(
-                  'Statistics',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppConstants.defaultPadding),
-            
-            if (_isLoading)
-              const Center(child: CircularProgressIndicator())
-            else
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : SingleChildScrollView(
+              padding: EdgeInsets.all(DesignSystem.screenMargin),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildStatItem(
-                    'Total Habits',
-                    '$_totalHabits',
-                    Icons.list,
-                    Colors.blue,
-                  ),
-                  _buildStatItem(
-                    'Total Entries',
-                    '$_totalEntries',
-                    Icons.event_available,
-                    Colors.green,
-                  ),
-                  _buildStatItem(
-                    'Days Active',
-                    '${_totalEntries > 0 ? _totalEntries : 0}',
-                    Icons.calendar_today,
-                    Colors.orange,
-                  ),
+                  // App Statistics
+                  _buildAppStatistics(),
+                  SizedBox(height: DesignSystem.spacingLarge),
+
+                  // Habit Management
+                  _buildHabitManagement(),
+                  SizedBox(height: DesignSystem.spacingLarge),
+
+                  // Data & Privacy
+                  _buildDataPrivacy(),
+                  SizedBox(height: DesignSystem.spacingLarge),
+
+                  // App Preferences
+                  _buildAppPreferences(),
+                  SizedBox(height: DesignSystem.spacingLarge),
+
+                  // About
+                  _buildAbout(),
                 ],
               ),
-          ],
-        ),
-      ),
+            ),
     );
   }
 
-  Widget _buildStatItem(String label, String value, IconData icon, Color color) {
-    return Column(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(AppConstants.smallPadding),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(AppConstants.smallBorderRadius),
-          ),
-          child: Icon(icon, color: color, size: 24),
-        ),
-        const SizedBox(height: AppConstants.smallPadding),
-        Text(
-          value,
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.bold,
-            color: color,
-          ),
-        ),
-        Text(
-          label,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: Colors.grey[600],
-          ),
-          textAlign: TextAlign.center,
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSettingsSection() {
-    return Card(
+  Widget _buildAppStatistics() {
+    return _buildSection(
+      title: 'Statistics',
+      icon: Icons.analytics,
       child: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.all(AppConstants.defaultPadding),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.settings,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(width: AppConstants.smallPadding),
-                Text(
-                  'App Settings',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
+          _buildStatRow(
+            'Total Habits Created',
+            _stats['total_habits']?.toString() ?? '0',
+            Icons.track_changes,
+            DesignSystem.primary,
           ),
-          _buildSettingsTile(
-            title: 'Theme',
-            subtitle: 'System default',
-            icon: Icons.palette,
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Theme settings coming soon!')),
-              );
-            },
+          _buildStatRow(
+            'Days Tracked',
+            _stats['total_days_tracked']?.toString() ?? '0',
+            Icons.calendar_today,
+            DesignSystem.success,
           ),
-          _buildSettingsTile(
-            title: 'Notifications',
-            subtitle: 'Remind me about my habits',
-            icon: Icons.notifications,
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Notification settings coming soon!')),
-              );
-            },
+          _buildStatRow(
+            'Total Completions',
+            _stats['total_completions']?.toString() ?? '0',
+            Icons.check_circle,
+            DesignSystem.warning,
           ),
-          _buildSettingsTile(
-            title: 'Default View',
-            subtitle: 'Dashboard',
-            icon: Icons.home,
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('View settings coming soon!')),
-              );
-            },
+          _buildStatRow(
+            'Current Streak',
+            _stats['longest_streak']?.toString() ?? '0',
+            Icons.local_fire_department,
+            Colors.orange,
           ),
         ],
       ),
     );
   }
 
-  Widget _buildDataSection() {
-    return Card(
+  Widget _buildHabitManagement() {
+    return _buildSection(
+      title: 'Habit Management',
+      icon: Icons.manage_accounts,
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.all(AppConstants.defaultPadding),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.storage,
-                  color: Theme.of(context).colorScheme.primary,
+          if (_archivedHabits.isEmpty)
+            Padding(
+              padding: EdgeInsets.symmetric(vertical: DesignSystem.spacingMedium),
+              child: Text(
+                'No archived habits',
+                style: DesignSystem.body.copyWith(
+                  color: context.secondaryTextColor,
                 ),
-                const SizedBox(width: AppConstants.smallPadding),
+              ),
+            )
+          else
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
                 Text(
-                  'Data Management',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
+                  'Archived Habits (${_archivedHabits.length})',
+                  style: DesignSystem.body.copyWith(
+                    color: context.textColor,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
+                SizedBox(height: DesignSystem.spacingSmall),
+                
+                ...(_archivedHabits.map((habit) => _buildArchivedHabitTile(habit))),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildArchivedHabitTile(Habit habit) {
+    final habitColor = DesignSystem.getHabitColor(habit.color);
+    
+    return Container(
+      margin: EdgeInsets.only(bottom: DesignSystem.spacingSmall),
+      padding: EdgeInsets.all(DesignSystem.spacingMedium),
+      decoration: BoxDecoration(
+        color: context.surfaceColor.withOpacity(0.5),
+        borderRadius: BorderRadius.circular(DesignSystem.tileBorderRadius),
+        border: Border.all(
+          color: context.secondaryTextColor.withOpacity(0.2),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: habitColor.withOpacity(0.3),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              _getHabitIcon(habit.icon),
+              color: habitColor,
+              size: 16,
+            ),
+          ),
+          SizedBox(width: DesignSystem.spacingMedium),
+          
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  habit.name,
+                  style: DesignSystem.body.copyWith(
+                    color: context.textColor,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                if (habit.description != null)
+                  Text(
+                    habit.description!,
+                    style: DesignSystem.caption.copyWith(
+                      color: context.secondaryTextColor,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
               ],
             ),
           ),
+          
+          // Action buttons
+          IconButton(
+            onPressed: () => _restoreHabit(habit),
+            icon: const Icon(Icons.restore),
+            tooltip: 'Restore',
+            style: IconButton.styleFrom(
+              foregroundColor: DesignSystem.success,
+            ),
+          ),
+          IconButton(
+            onPressed: () => _permanentlyDeleteHabit(habit),
+            icon: const Icon(Icons.delete_forever),
+            tooltip: 'Delete Permanently',
+            style: IconButton.styleFrom(
+              foregroundColor: DesignSystem.destructive,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDataPrivacy() {
+    return _buildSection(
+      title: 'Data & Privacy',
+      icon: Icons.security,
+      child: Column(
+        children: [
           _buildSettingsTile(
             title: 'Export Data',
-            subtitle: 'Backup your habits and progress',
-            icon: Icons.upload,
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Export feature coming soon!')),
-              );
-            },
+            subtitle: 'Save your habits and progress',
+            icon: Icons.download,
+            onTap: _exportData,
           ),
           _buildSettingsTile(
             title: 'Import Data',
             subtitle: 'Restore from backup',
-            icon: Icons.download,
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Import feature coming soon!')),
-              );
-            },
+            icon: Icons.upload,
+            onTap: _importData,
           ),
           _buildSettingsTile(
-            title: 'Reset All Data',
-            subtitle: 'Permanently delete all habits and progress',
-            icon: Icons.delete_forever,
-            iconColor: Colors.red,
-            onTap: _showResetDataDialog,
+            title: 'Clear All Data',
+            subtitle: 'Reset the app to initial state',
+            icon: Icons.warning,
+            iconColor: DesignSystem.destructive,
+            onTap: _showClearDataConfirmation,
           ),
         ],
       ),
     );
   }
 
-  Widget _buildAboutSection() {
-    return Card(
+  Widget _buildAppPreferences() {
+    return _buildSection(
+      title: 'App Preferences',
+      icon: Icons.tune,
       child: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.all(AppConstants.defaultPadding),
-            child: Row(
+          _buildThemeSelector(),
+          _buildSettingsTile(
+            title: 'Notifications',
+            subtitle: 'Manage reminder settings',
+            icon: Icons.notifications,
+            onTap: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Notifications settings coming soon!')),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildThemeSelector() {
+    return Container(
+      padding: EdgeInsets.all(DesignSystem.spacingMedium),
+      child: Row(
+        children: [
+          Icon(
+            Icons.palette,
+            color: context.secondaryTextColor,
+            size: 24,
+          ),
+          SizedBox(width: DesignSystem.spacingMedium),
+          
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(
-                  Icons.info,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(width: AppConstants.smallPadding),
                 Text(
-                  'About',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
+                  'Theme',
+                  style: DesignSystem.body.copyWith(
+                    color: context.textColor,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                Text(
+                  'Choose app appearance',
+                  style: DesignSystem.caption.copyWith(
+                    color: context.secondaryTextColor,
                   ),
                 ),
               ],
             ),
           ),
+          
+          SegmentedButton<ThemeMode>(
+            segments: const [
+              ButtonSegment(
+                value: ThemeMode.light,
+                label: Text('Light'),
+                icon: Icon(Icons.light_mode, size: 16),
+              ),
+              ButtonSegment(
+                value: ThemeMode.dark,
+                label: Text('Dark'),
+                icon: Icon(Icons.dark_mode, size: 16),
+              ),
+              ButtonSegment(
+                value: ThemeMode.system,
+                label: Text('Auto'),
+                icon: Icon(Icons.auto_mode, size: 16),
+              ),
+            ],
+            selected: {_themeMode},
+            onSelectionChanged: (Set<ThemeMode> selection) {
+              setState(() {
+                _themeMode = selection.first;
+              });
+              // TODO: Implement theme persistence
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Theme preference saved!')),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAbout() {
+    return _buildSection(
+      title: 'About',
+      icon: Icons.info,
+      child: Column(
+        children: [
           _buildSettingsTile(
-            title: 'About ${AppConstants.appName}',
-            subtitle: 'Version ${AppConstants.appVersion}',
+            title: 'Version',
+            subtitle: '1.0.0',
             icon: Icons.info_outline,
-            onTap: _showAboutDialog,
+            showArrow: false,
           ),
           _buildSettingsTile(
             title: 'Privacy Policy',
-            subtitle: 'How we handle your data',
+            subtitle: 'Learn how we protect your data',
             icon: Icons.privacy_tip,
             onTap: () {
               ScaffoldMessenger.of(context).showSnackBar(
@@ -404,23 +471,96 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           _buildSettingsTile(
             title: 'Terms of Service',
-            subtitle: 'Legal terms and conditions',
-            icon: Icons.gavel,
+            subtitle: 'App usage terms and conditions',
+            icon: Icons.description,
             onTap: () {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Terms of service coming soon!')),
               );
             },
           ),
-          _buildSettingsTile(
-            title: 'Rate App',
-            subtitle: 'Help us improve',
-            icon: Icons.star,
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Thanks for your support!')),
-              );
-            },
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSection({
+    required String title,
+    required IconData icon,
+    required Widget child,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: context.surfaceColor,
+        borderRadius: BorderRadius.circular(DesignSystem.cardBorderRadius),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: EdgeInsets.all(DesignSystem.spacingMedium),
+            child: Row(
+              children: [
+                Icon(
+                  icon,
+                  color: DesignSystem.primary,
+                  size: 20,
+                ),
+                SizedBox(width: DesignSystem.spacingSmall),
+                Text(
+                  title,
+                  style: DesignSystem.headline.copyWith(
+                    color: context.textColor,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatRow(
+    String label,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
+    return Padding(
+      padding: EdgeInsets.symmetric(
+        horizontal: DesignSystem.spacingMedium,
+        vertical: DesignSystem.spacingSmall,
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(DesignSystem.tileBorderRadius),
+            ),
+            child: Icon(icon, color: color, size: 16),
+          ),
+          SizedBox(width: DesignSystem.spacingMedium),
+          
+          Expanded(
+            child: Text(
+              label,
+              style: DesignSystem.body.copyWith(
+                color: context.textColor,
+              ),
+            ),
+          ),
+          
+          Text(
+            value,
+            style: DesignSystem.body.copyWith(
+              color: color,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
@@ -431,21 +571,119 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required String title,
     required String subtitle,
     required IconData icon,
-    required VoidCallback onTap,
     Color? iconColor,
+    bool showArrow = true,
+    VoidCallback? onTap,
   }) {
-    return ListTile(
-      leading: Icon(
-        icon,
-        color: iconColor ?? Colors.grey[600],
-      ),
-      title: Text(
-        title,
-        style: const TextStyle(fontWeight: FontWeight.w500),
-      ),
-      subtitle: Text(subtitle),
-      trailing: const Icon(Icons.chevron_right),
+    return InkWell(
       onTap: onTap,
+      borderRadius: BorderRadius.circular(DesignSystem.tileBorderRadius),
+      child: Padding(
+        padding: EdgeInsets.all(DesignSystem.spacingMedium),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              color: iconColor ?? context.secondaryTextColor,
+              size: 24,
+            ),
+            SizedBox(width: DesignSystem.spacingMedium),
+            
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: DesignSystem.body.copyWith(
+                      color: context.textColor,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    style: DesignSystem.caption.copyWith(
+                      color: context.secondaryTextColor,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            
+            if (showArrow)
+              Icon(
+                Icons.chevron_right,
+                color: context.secondaryTextColor,
+                size: 20,
+              ),
+          ],
+        ),
+      ),
     );
+  }
+
+  Future<void> _showClearDataConfirmation() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Clear All Data'),
+        content: const Text(
+          'This will permanently delete all your habits, completions, and settings. This action cannot be undone.\n\nAre you sure you want to continue?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: DesignSystem.destructive),
+            child: const Text('Clear All Data'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        await _databaseHelper.deleteDatabase();
+        await _loadData();
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('All data cleared successfully')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error clearing data: $e')),
+          );
+        }
+      }
+    }
+  }
+
+  IconData _getHabitIcon(String iconName) {
+    // Map icon names to actual icons
+    switch (iconName) {
+      case 'fitness_center': return Icons.fitness_center;
+      case 'local_drink': return Icons.local_drink;
+      case 'book': return Icons.book;
+      case 'bedtime': return Icons.bedtime;
+      case 'directions_run': return Icons.directions_run;
+      case 'self_improvement': return Icons.self_improvement;
+      case 'music_note': return Icons.music_note;
+      case 'palette': return Icons.palette;
+      case 'work': return Icons.work;
+      case 'school': return Icons.school;
+      case 'restaurant': return Icons.restaurant;
+      case 'phone': return Icons.phone;
+      case 'computer': return Icons.computer;
+      case 'favorite': return Icons.favorite;
+      case 'lightbulb': return Icons.lightbulb;
+      case 'nature': return Icons.nature;
+      default: return Icons.track_changes;
+    }
   }
 }

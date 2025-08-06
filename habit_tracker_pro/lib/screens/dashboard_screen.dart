@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import '../models/habit.dart';
+import '../models/completion.dart';
 import '../services/database_helper.dart';
-import '../widgets/habit_tile.dart';
-import '../utils/constants.dart';
+import '../widgets/completion_tile.dart';
+import '../utils/design_system.dart';
 import 'add_habit_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -14,21 +15,39 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   final DatabaseHelper _databaseHelper = DatabaseHelper();
-  List<Habit> _habits = [];
+  List<Map<String, dynamic>> _habitsWithCompletion = [];
   bool _isLoading = true;
+  final GlobalKey<RefreshIndicatorState> _refreshIndicatorKey = GlobalKey<RefreshIndicatorState>();
 
   @override
   void initState() {
     super.initState();
-    _loadHabits();
+    _loadData();
   }
 
-  Future<void> _loadHabits() async {
+  Future<void> _loadData() async {
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
+
     try {
-      final habits = await _databaseHelper.getAllHabits();
+      final today = DateTime.now();
+      final habitsData = await _databaseHelper.getHabitsWithCompletionForDate(today);
+      
+      // Get streaks for each habit
+      final habitsWithStreaks = <Map<String, dynamic>>[];
+      for (final habitData in habitsData) {
+        final streak = await _databaseHelper.getStreakForHabit(habitData['id']);
+        final habitWithStreak = Map<String, dynamic>.from(habitData);
+        habitWithStreak['streak'] = streak;
+        habitsWithStreaks.add(habitWithStreak);
+      }
+
       if (mounted) {
         setState(() {
-          _habits = habits;
+          _habitsWithCompletion = habitsWithStreaks;
           _isLoading = false;
         });
       }
@@ -44,6 +63,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Future<void> _toggleHabitCompletion(int habitId) async {
+    try {
+      final today = DateTime.now();
+      final existingCompletion = await _databaseHelper.getCompletionForDate(habitId, today);
+
+      if (existingCompletion != null) {
+        // Remove completion
+        await _databaseHelper.deleteCompletion(existingCompletion.id!);
+      } else {
+        // Add completion
+        final completion = Completion(
+          habitId: habitId,
+          completionDate: today,
+          createdAt: DateTime.now(),
+        );
+        await _databaseHelper.insertCompletion(completion);
+      }
+
+      // Reload data
+      await _loadData();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error updating habit: $e')),
+        );
+      }
+    }
+  }
+
   Future<void> _addHabit() async {
     final result = await Navigator.push<bool>(
       context,
@@ -53,11 +101,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
 
     if (result == true) {
-      await _loadHabits();
+      await _loadData();
     }
   }
 
-  Future<void> _editHabit(Habit habit) async {
+  Future<void> _editHabit(Map<String, dynamic> habitData) async {
+    final habit = Habit.fromMap(habitData);
     final result = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
@@ -66,37 +115,37 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
 
     if (result == true) {
-      await _loadHabits();
+      await _loadData();
     }
   }
 
-  Future<void> _deleteHabit(Habit habit) async {
-    final confirmed = await _showDeleteConfirmation(habit);
+  Future<void> _archiveHabit(Map<String, dynamic> habitData) async {
+    final confirmed = await _showArchiveConfirmation(habitData['name']);
     if (confirmed == true) {
       try {
-        await _databaseHelper.deleteHabit(habit.id!);
-        await _loadHabits();
+        await _databaseHelper.archiveHabit(habitData['id']);
+        await _loadData();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('${habit.name} deleted')),
+            SnackBar(content: Text('${habitData['name']} archived')),
           );
         }
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error deleting habit: $e')),
+            SnackBar(content: Text('Error archiving habit: $e')),
           );
         }
       }
     }
   }
 
-  Future<bool?> _showDeleteConfirmation(Habit habit) {
+  Future<bool?> _showArchiveConfirmation(String habitName) {
     return showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete Habit'),
-        content: Text('Are you sure you want to delete "${habit.name}"? This action cannot be undone.'),
+        title: const Text('Archive Habit'),
+        content: Text('Are you sure you want to archive "$habitName"? You can restore it later from Settings.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -104,248 +153,166 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Delete'),
+            child: const Text('Archive'),
           ),
         ],
       ),
     );
+  }
+
+  String _getGreeting() {
+    final hour = DateTime.now().hour;
+    if (hour < 12) {
+      return 'Good morning';
+    } else if (hour < 17) {
+      return 'Good afternoon';
+    } else {
+      return 'Good evening';
+    }
+  }
+
+  String _getCurrentDate() {
+    final now = DateTime.now();
+    final months = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    return '${months[now.month - 1]} ${now.day}';
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text(
-          AppConstants.appName,
-          style: TextStyle(fontWeight: FontWeight.bold),
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      body: RefreshIndicator(
+        key: _refreshIndicatorKey,
+        onRefresh: _loadData,
+        child: CustomScrollView(
+          slivers: [
+            // Header with greeting and add button
+            SliverAppBar(
+              expandedHeight: 120,
+              floating: false,
+              pinned: true,
+              elevation: 0,
+              backgroundColor: Colors.transparent,
+              flexibleSpace: FlexibleSpaceBar(
+                background: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    DesignSystem.screenMargin,
+                    MediaQuery.of(context).padding.top + DesignSystem.spacingMedium,
+                    DesignSystem.screenMargin,
+                    DesignSystem.spacingMedium,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Greeting text (Large Title - 34pt Bold)
+                      Text(
+                        _getGreeting(),
+                        style: DesignSystem.largeTitle.copyWith(
+                          color: context.textColor,
+                        ),
+                      ),
+                      SizedBox(height: DesignSystem.spacingMicro),
+                      // Current date display
+                      Text(
+                        _getCurrentDate(),
+                        style: DesignSystem.body.copyWith(
+                          color: context.secondaryTextColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                // Add habit button (+ icon, top-right)
+                Padding(
+                  padding: EdgeInsets.only(right: DesignSystem.screenMargin),
+                  child: IconButton(
+                    onPressed: _addHabit,
+                    icon: const Icon(Icons.add),
+                    style: IconButton.styleFrom(
+                      backgroundColor: DesignSystem.primary,
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size(44, 44),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            
+            // Habit cards list
+            if (_isLoading)
+              const SliverFillRemaining(
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (_habitsWithCompletion.isEmpty)
+              SliverFillRemaining(
+                child: _buildEmptyState(),
+              )
+            else
+              SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) {
+                    final habitData = _habitsWithCompletion[index];
+                    return HabitCard(
+                      habitData: habitData,
+                      streak: habitData['streak'] ?? 0,
+                      onTap: () => _toggleHabitCompletion(habitData['id']),
+                      onEdit: () => _editHabit(habitData),
+                      onArchive: () => _archiveHabit(habitData),
+                    );
+                  },
+                  childCount: _habitsWithCompletion.length,
+                ),
+              ),
+            
+            // Bottom padding for safe area
+            SliverToBoxAdapter(
+              child: SizedBox(height: MediaQuery.of(context).padding.bottom + DesignSystem.spacingLarge),
+            ),
+          ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadHabits,
-            tooltip: 'Refresh',
-          ),
-        ],
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _habits.isEmpty
-              ? _buildEmptyState()
-              : _buildHabitsList(),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addHabit,
-        icon: const Icon(Icons.add),
-        label: const Text('Add Habit'),
-        tooltip: 'Add new habit',
       ),
     );
   }
 
   Widget _buildEmptyState() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(AppConstants.largePadding),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.track_changes,
-              size: 80,
-              color: Colors.grey[400],
-            ),
-            const SizedBox(height: AppConstants.defaultPadding),
-            Text(
-              'No habits yet',
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                color: Colors.grey[600],
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: AppConstants.smallPadding),
-            Text(
-              'Start building better habits by adding your first one!',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: Colors.grey[600],
-              ),
-            ),
-            const SizedBox(height: AppConstants.largePadding),
-            ElevatedButton.icon(
-              onPressed: _addHabit,
-              icon: const Icon(Icons.add),
-              label: const Text('Add Your First Habit'),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppConstants.largePadding,
-                  vertical: AppConstants.defaultPadding,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildHabitsList() {
-    return RefreshIndicator(
-      onRefresh: _loadHabits,
-      child: CustomScrollView(
-        slivers: [
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.all(AppConstants.defaultPadding),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildStatsHeader(),
-                  const SizedBox(height: AppConstants.defaultPadding),
-                  Text(
-                    'Your Habits',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
+    return Padding(
+      padding: EdgeInsets.all(DesignSystem.spacingLarge),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.track_changes,
+            size: 80,
+            color: context.secondaryTextColor.withOpacity(0.5),
+          ),
+          SizedBox(height: DesignSystem.spacingLarge),
+          Text(
+            'No habits yet',
+            style: DesignSystem.title1.copyWith(
+              color: context.textColor,
             ),
           ),
-          SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: AppConstants.defaultPadding),
-            sliver: SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  final habit = _habits[index];
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: AppConstants.defaultPadding),
-                    child: HabitTile(
-                      habit: habit,
-                      onEdit: () => _editHabit(habit),
-                      onDelete: () => _deleteHabit(habit),
-                    ),
-                  );
-                },
-                childCount: _habits.length,
-              ),
+          SizedBox(height: DesignSystem.spacingSmall),
+          Text(
+            'Start building better habits by creating your first one!',
+            textAlign: TextAlign.center,
+            style: DesignSystem.body.copyWith(
+              color: context.secondaryTextColor,
             ),
           ),
-          // Add some bottom padding for the FAB
-          const SliverToBoxAdapter(
-            child: SizedBox(height: 80),
+          SizedBox(height: DesignSystem.spacingLarge),
+          ElevatedButton.icon(
+            onPressed: _addHabit,
+            icon: const Icon(Icons.add),
+            label: const Text('Create Your First Habit'),
           ),
         ],
       ),
     );
-  }
-
-  Widget _buildStatsHeader() {
-    if (_habits.isEmpty) return const SizedBox();
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppConstants.defaultPadding),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  Icons.analytics,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(width: AppConstants.smallPadding),
-                Text(
-                  'Today\'s Overview',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppConstants.defaultPadding),
-            FutureBuilder<Map<String, int>>(
-              future: _getTodayStats(),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-
-                final stats = snapshot.data!;
-                return Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: [
-                    _buildStatCard(
-                      'Total Habits',
-                      '${_habits.length}',
-                      Icons.list,
-                      Colors.blue,
-                    ),
-                    _buildStatCard(
-                      'Completed',
-                      '${stats['completed']}',
-                      Icons.check_circle,
-                      Colors.green,
-                    ),
-                    _buildStatCard(
-                      'Remaining',
-                      '${stats['remaining']}',
-                      Icons.pending,
-                      Colors.orange,
-                    ),
-                  ],
-                );
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStatCard(String label, String value, IconData icon, Color color) {
-    return Column(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(AppConstants.smallPadding),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(AppConstants.smallBorderRadius),
-          ),
-          child: Icon(icon, color: color, size: 24),
-        ),
-        const SizedBox(height: AppConstants.smallPadding),
-        Text(
-          value,
-          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-            fontWeight: FontWeight.bold,
-            color: color,
-          ),
-        ),
-        Text(
-          label,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: Colors.grey[600],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Future<Map<String, int>> _getTodayStats() async {
-    int completed = 0;
-    final today = DateTime.now();
-
-    for (final habit in _habits) {
-      final entry = await _databaseHelper.getHabitEntryForDate(habit.id!, today);
-      if (entry != null && entry.isCompleted(habit.targetCount)) {
-        completed++;
-      }
-    }
-
-    return {
-      'completed': completed,
-      'remaining': _habits.length - completed,
-    };
   }
 }

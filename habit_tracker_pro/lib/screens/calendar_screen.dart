@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
 import '../models/habit.dart';
-import '../models/habit_entry.dart';
+import '../models/completion.dart';
 import '../services/database_helper.dart';
-import '../utils/constants.dart';
-import '../utils/date_helper.dart';
-import '../widgets/progress_grid.dart';
+import '../utils/design_system.dart';
 
 class CalendarScreen extends StatefulWidget {
   const CalendarScreen({super.key});
@@ -15,11 +13,11 @@ class CalendarScreen extends StatefulWidget {
 
 class _CalendarScreenState extends State<CalendarScreen> {
   final DatabaseHelper _databaseHelper = DatabaseHelper();
-  DateTime _selectedDate = DateTime.now();
-  DateTime _currentMonth = DateTime.now();
+  DateTime _selectedMonth = DateTime.now();
   List<Habit> _habits = [];
-  Map<String, dynamic> _dayData = {};
+  Map<String, List<Completion>> _completionsByDate = {};
   bool _isLoading = true;
+  bool _isYearView = false;
 
   @override
   void initState() {
@@ -28,381 +26,464 @@ class _CalendarScreenState extends State<CalendarScreen> {
   }
 
   Future<void> _loadData() async {
-    await _loadHabits();
-    await _loadDayData();
-  }
+    setState(() {
+      _isLoading = true;
+    });
 
-  Future<void> _loadHabits() async {
     try {
+      // Load habits
       final habits = await _databaseHelper.getAllHabits();
+      
+      // Load completions for the selected month (or year if in year view)
+      final startDate = _isYearView 
+          ? DateTime(_selectedMonth.year, 1, 1)
+          : DateTime(_selectedMonth.year, _selectedMonth.month, 1);
+      final endDate = _isYearView 
+          ? DateTime(_selectedMonth.year, 12, 31)
+          : DateTime(_selectedMonth.year, _selectedMonth.month + 1, 0);
+      
+      final completionsByDate = <String, List<Completion>>{};
+      
+      for (final habit in habits) {
+        final completions = await _databaseHelper.getCompletionsForHabit(habit.id!);
+        
+        // Filter completions for the date range
+        final filteredCompletions = completions.where((completion) {
+          final date = completion.completionDate;
+          return date.isAfter(startDate.subtract(const Duration(days: 1))) &&
+                 date.isBefore(endDate.add(const Duration(days: 1)));
+        }).toList();
+        
+        // Group by date string
+        for (final completion in filteredCompletions) {
+          final dateKey = _formatDateKey(completion.completionDate);
+          completionsByDate[dateKey] = completionsByDate[dateKey] ?? [];
+          completionsByDate[dateKey]!.add(completion);
+        }
+      }
+
       if (mounted) {
         setState(() {
           _habits = habits;
+          _completionsByDate = completionsByDate;
+          _isLoading = false;
         });
       }
     } catch (e) {
       if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading habits: $e')),
+          SnackBar(content: Text('Error loading calendar data: $e')),
         );
       }
     }
   }
 
-  Future<void> _loadDayData() async {
-    try {
-      final entries = await _databaseHelper.getEntriesForDate(_selectedDate);
-      if (mounted) {
-        setState(() {
-          _dayData = {};
-          for (final entry in entries) {
-            _dayData[entry['id'].toString()] = entry;
-          }
-          _isLoading = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
-    }
+  String _formatDateKey(DateTime date) {
+    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
   }
 
-  Future<void> _toggleHabitForDate(Habit habit) async {
-    try {
-      final existingEntry = await _databaseHelper.getHabitEntryForDate(
-        habit.id!,
-        _selectedDate,
-      );
-
-      if (existingEntry != null) {
-        // Increment completion count
-        final newCount = existingEntry.completionCount + 1;
-        final updatedEntry = existingEntry.copyWith(
-          completionCount: newCount,
-        );
-        await _databaseHelper.updateHabitEntry(updatedEntry);
+  void _previousPeriod() {
+    setState(() {
+      if (_isYearView) {
+        _selectedMonth = DateTime(_selectedMonth.year - 1, _selectedMonth.month);
       } else {
-        // Create new entry
-        final newEntry = HabitEntry(
-          habitId: habit.id!,
-          date: _selectedDate,
-          completionCount: 1,
-          createdAt: DateTime.now(),
-        );
-        await _databaseHelper.insertHabitEntry(newEntry);
+        _selectedMonth = DateTime(_selectedMonth.year, _selectedMonth.month - 1);
       }
+    });
+    _loadData();
+  }
 
-      await _loadDayData();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error updating habit: $e')),
-        );
+  void _nextPeriod() {
+    setState(() {
+      if (_isYearView) {
+        _selectedMonth = DateTime(_selectedMonth.year + 1, _selectedMonth.month);
+      } else {
+        _selectedMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1);
       }
+    });
+    _loadData();
+  }
+
+  void _toggleView() {
+    setState(() {
+      _isYearView = !_isYearView;
+    });
+    _loadData();
+  }
+
+  String _getHeaderTitle() {
+    if (_isYearView) {
+      return _selectedMonth.year.toString();
+    } else {
+      final months = [
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'
+      ];
+      return '${months[_selectedMonth.month - 1]} ${_selectedMonth.year}';
     }
-  }
-
-  void _selectDate(DateTime date) {
-    setState(() {
-      _selectedDate = DateHelper.dateOnly(date);
-      _isLoading = true;
-    });
-    _loadDayData();
-  }
-
-  void _changeMonth(int monthOffset) {
-    setState(() {
-      _currentMonth = DateTime(_currentMonth.year, _currentMonth.month + monthOffset, 1);
-    });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: AppBar(
-        title: const Text(
+        title: Text(
           'Calendar',
-          style: TextStyle(fontWeight: FontWeight.bold),
+          style: DesignSystem.largeTitle.copyWith(
+            color: context.textColor,
+            fontSize: 28, // Slightly smaller for app bar
+          ),
         ),
         actions: [
+          // View toggle button
           IconButton(
-            icon: const Icon(Icons.today),
-            onPressed: () {
-              final today = DateTime.now();
-              setState(() {
-                _selectedDate = DateHelper.dateOnly(today);
-                _currentMonth = DateTime(today.year, today.month, 1);
-                _isLoading = true;
-              });
-              _loadDayData();
-            },
-            tooltip: 'Go to today',
+            onPressed: _toggleView,
+            icon: Icon(_isYearView ? Icons.calendar_view_month : Icons.calendar_view_week),
+            tooltip: _isYearView ? 'Month View' : 'Year View',
           ),
         ],
       ),
       body: Column(
         children: [
-          // Calendar Header
-          _buildCalendarHeader(),
+          // Header controls
+          _buildHeaderControls(),
           
-          // Calendar Grid
-          _buildCalendarGrid(),
-          
-          // Selected Date Info
-          _buildSelectedDateInfo(),
+          // Calendar content
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _habits.isEmpty
+                    ? _buildEmptyState()
+                    : _isYearView
+                        ? _buildYearView()
+                        : _buildMonthView(),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildCalendarHeader() {
-    return Card(
-      margin: const EdgeInsets.all(AppConstants.defaultPadding),
-      child: Padding(
-        padding: const EdgeInsets.all(AppConstants.defaultPadding),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            IconButton(
-              onPressed: () => _changeMonth(-1),
-              icon: const Icon(Icons.chevron_left),
+  Widget _buildHeaderControls() {
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: DesignSystem.screenMargin,
+        vertical: DesignSystem.spacingMedium,
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          // Previous button
+          IconButton(
+            onPressed: _previousPeriod,
+            icon: const Icon(Icons.chevron_left),
+            style: IconButton.styleFrom(
+              backgroundColor: context.surfaceColor,
+              minimumSize: const Size(44, 44),
             ),
-            Text(
-              '${DateHelper.getMonthName(_currentMonth.month)} ${_currentMonth.year}',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
+          ),
+          
+          // Title
+          Text(
+            _getHeaderTitle(),
+            style: DesignSystem.title1.copyWith(
+              color: context.textColor,
             ),
-            IconButton(
-              onPressed: () => _changeMonth(1),
-              icon: const Icon(Icons.chevron_right),
+          ),
+          
+          // Next button
+          IconButton(
+            onPressed: _nextPeriod,
+            icon: const Icon(Icons.chevron_right),
+            style: IconButton.styleFrom(
+              backgroundColor: context.surfaceColor,
+              minimumSize: const Size(44, 44),
             ),
-          ],
-        ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Padding(
+      padding: EdgeInsets.all(DesignSystem.spacingLarge),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.calendar_today,
+            size: 80,
+            color: context.secondaryTextColor.withOpacity(0.5),
+          ),
+          SizedBox(height: DesignSystem.spacingLarge),
+          Text(
+            'No habits to track',
+            style: DesignSystem.title1.copyWith(
+              color: context.textColor,
+            ),
+          ),
+          SizedBox(height: DesignSystem.spacingSmall),
+          Text(
+            'Create some habits to see your progress here!',
+            textAlign: TextAlign.center,
+            style: DesignSystem.body.copyWith(
+              color: context.secondaryTextColor,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMonthView() {
+    return SingleChildScrollView(
+      padding: EdgeInsets.all(DesignSystem.screenMargin),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Calendar grid
+          _buildCalendarGrid(),
+          
+          SizedBox(height: DesignSystem.spacingLarge),
+          
+          // Habit legend
+          if (_habits.isNotEmpty) _buildHabitLegend(),
+        ],
       ),
     );
   }
 
   Widget _buildCalendarGrid() {
-    final weeks = DateHelper.getWeeksInMonth(_currentMonth);
-    
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: AppConstants.defaultPadding),
-      child: Padding(
-        padding: const EdgeInsets.all(AppConstants.defaultPadding),
-        child: Column(
-          children: [
-            // Day labels
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-                  .map((day) => SizedBox(
-                        width: 40,
-                        child: Text(
-                          day,
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            fontWeight: FontWeight.w600,
-                            color: Colors.grey[600],
-                          ),
-                        ),
-                      ))
-                  .toList(),
-            ),
-            const SizedBox(height: AppConstants.smallPadding),
-            
-            // Calendar days
-            ...weeks.map((week) => _buildWeekRow(week)),
-          ],
-        ),
+    final daysInMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1, 0).day;
+    final firstDayOfMonth = DateTime(_selectedMonth.year, _selectedMonth.month, 1);
+    final firstWeekday = firstDayOfMonth.weekday % 7; // Sunday = 0
+
+    return Container(
+      decoration: BoxDecoration(
+        color: context.surfaceColor,
+        borderRadius: BorderRadius.circular(DesignSystem.cardBorderRadius),
       ),
-    );
-  }
-
-  Widget _buildWeekRow(List<DateTime> week) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: week.map((date) => _buildDayTile(date)).toList(),
-      ),
-    );
-  }
-
-  Widget _buildDayTile(DateTime date) {
-    final isCurrentMonth = date.month == _currentMonth.month;
-    final isSelected = DateHelper.isSameDay(date, _selectedDate);
-    final isToday = DateHelper.isToday(date);
-    final isFuture = date.isAfter(DateTime.now());
-
-    return GestureDetector(
-      onTap: () => _selectDate(date),
-      child: FutureBuilder<int>(
-        future: _getCompletedHabitsForDate(date),
-        builder: (context, snapshot) {
-          final completedCount = snapshot.data ?? 0;
-          final hasData = completedCount > 0;
-          
-          return Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: isSelected
-                  ? Theme.of(context).colorScheme.primary
-                  : hasData && isCurrentMonth
-                      ? Colors.green.withOpacity(0.2)
-                      : null,
-              border: isToday
-                  ? Border.all(color: Theme.of(context).colorScheme.primary, width: 2)
-                  : null,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Stack(
-              children: [
-                Center(
-                  child: Text(
-                    '${date.day}',
-                    style: TextStyle(
-                      color: isSelected
-                          ? Colors.white
-                          : isCurrentMonth
-                              ? (isFuture ? Colors.grey : Colors.black)
-                              : Colors.grey[400],
-                      fontWeight: isToday ? FontWeight.bold : FontWeight.normal,
-                    ),
-                  ),
-                ),
-                if (hasData && isCurrentMonth && !isSelected)
-                  Positioned(
-                    right: 2,
-                    top: 2,
-                    child: Container(
-                      width: 8,
-                      height: 8,
-                      decoration: const BoxDecoration(
-                        color: Colors.green,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildSelectedDateInfo() {
-    return Expanded(
+      padding: EdgeInsets.all(DesignSystem.spacingMedium),
       child: Column(
         children: [
-          // Selected date header
-          Padding(
-            padding: const EdgeInsets.all(AppConstants.defaultPadding),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.event,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(width: AppConstants.smallPadding),
-                Text(
-                  DateHelper.formatDateReadable(_selectedDate),
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
+          // Day headers (Sun-Sat)
+          Row(
+            children: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+                .map((day) => Expanded(
+                      child: Center(
+                        child: Text(
+                          day,
+                          style: DesignSystem.caption.copyWith(
+                            color: context.secondaryTextColor,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ))
+                .toList(),
           ),
           
-          // Habits for selected date
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _habits.isEmpty
-                    ? const Center(
-                        child: Text('No habits to track'),
-                      )
-                    : ListView.builder(
-                        padding: const EdgeInsets.symmetric(horizontal: AppConstants.defaultPadding),
-                        itemCount: _habits.length,
-                        itemBuilder: (context, index) {
-                          final habit = _habits[index];
-                          return _buildHabitCard(habit);
-                        },
-                      ),
-          ),
+          SizedBox(height: DesignSystem.spacingSmall),
+          
+          // Calendar days
+          ...List.generate((daysInMonth + firstWeekday + 6) ~/ 7, (weekIndex) {
+            return Padding(
+              padding: EdgeInsets.only(bottom: DesignSystem.spacingSmall),
+              child: Row(
+                children: List.generate(7, (dayIndex) {
+                  final dayNumber = weekIndex * 7 + dayIndex - firstWeekday + 1;
+                  
+                  if (dayNumber < 1 || dayNumber > daysInMonth) {
+                    return const Expanded(child: SizedBox(height: 60));
+                  }
+                  
+                  return Expanded(
+                    child: _buildCalendarDay(dayNumber),
+                  );
+                }),
+              ),
+            );
+          }),
         ],
       ),
     );
   }
 
-  Widget _buildHabitCard(Habit habit) {
-    final habitData = _dayData[habit.id.toString()];
-    final completionCount = habitData?['completionCount'] ?? 0;
-    final isCompleted = completionCount >= habit.targetCount;
-    final habitColor = AppConstants.getColorByName(habit.color);
-    final habitIcon = AppConstants.getIconByName(habit.icon);
+  Widget _buildCalendarDay(int day) {
+    final date = DateTime(_selectedMonth.year, _selectedMonth.month, day);
+    final dateKey = _formatDateKey(date);
+    final completions = _completionsByDate[dateKey] ?? [];
+    final isToday = _isToday(date);
+    
+    return Container(
+      height: 60,
+      margin: EdgeInsets.symmetric(horizontal: DesignSystem.spacingMicro),
+      decoration: BoxDecoration(
+        color: isToday 
+            ? DesignSystem.primary.withOpacity(0.1)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(DesignSystem.tileBorderRadius),
+        border: isToday 
+            ? Border.all(color: DesignSystem.primary, width: 2)
+            : null,
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          // Day number
+          Text(
+            day.toString(),
+            style: DesignSystem.body.copyWith(
+              color: isToday 
+                  ? DesignSystem.primary 
+                  : context.textColor,
+              fontWeight: isToday ? FontWeight.w600 : FontWeight.normal,
+            ),
+          ),
+          
+          SizedBox(height: DesignSystem.spacingMicro),
+          
+          // Completion dots
+          if (completions.isNotEmpty) _buildCompletionDots(completions),
+        ],
+      ),
+    );
+  }
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: AppConstants.defaultPadding),
-      child: Padding(
-        padding: const EdgeInsets.all(AppConstants.defaultPadding),
-        child: Row(
+  Widget _buildCompletionDots(List<Completion> completions) {
+    // Group completions by habit to get unique colors
+    final habitIds = completions.map((c) => c.habitId).toSet().toList();
+    final maxDots = 3; // Show max 3 dots
+    
+    return Wrap(
+      spacing: 2,
+      runSpacing: 2,
+      children: habitIds.take(maxDots).map((habitId) {
+        final habit = _habits.firstWhere((h) => h.id == habitId);
+        final color = DesignSystem.getHabitColor(habit.color);
+        
+        return Container(
+          width: 6,
+          height: 6,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+          ),
+        );
+      }).toList()
+        ..addAll(
+          habitIds.length > maxDots
+              ? [
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: context.secondaryTextColor,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ]
+              : [],
+        ),
+    );
+  }
+
+  Widget _buildYearView() {
+    return SingleChildScrollView(
+      padding: EdgeInsets.all(DesignSystem.screenMargin),
+      child: Column(
+        children: [
+          // Year heat map grid (12 months)
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              crossAxisSpacing: 16,
+              mainAxisSpacing: 16,
+              childAspectRatio: 1.2,
+            ),
+            itemCount: 12,
+            itemBuilder: (context, index) {
+              return _buildMonthHeatMap(index + 1);
+            },
+          ),
+          
+          SizedBox(height: DesignSystem.spacingLarge),
+          
+          // Habit legend
+          if (_habits.isNotEmpty) _buildHabitLegend(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMonthHeatMap(int month) {
+    final monthDate = DateTime(_selectedMonth.year, month);
+    final monthName = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ][month - 1];
+    
+    final daysInMonth = DateTime(_selectedMonth.year, month + 1, 0).day;
+    
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _selectedMonth = monthDate;
+          _isYearView = false;
+        });
+        _loadData();
+      },
+      child: Container(
+        padding: EdgeInsets.all(DesignSystem.spacingSmall),
+        decoration: BoxDecoration(
+          color: context.surfaceColor,
+          borderRadius: BorderRadius.circular(DesignSystem.cardBorderRadius),
+        ),
+        child: Column(
           children: [
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: habitColor.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(AppConstants.smallBorderRadius),
-              ),
-              child: Icon(
-                habitIcon,
-                color: habitColor,
-                size: 24,
+            Text(
+              monthName,
+              style: DesignSystem.body.copyWith(
+                color: context.textColor,
+                fontWeight: FontWeight.w600,
               ),
             ),
-            const SizedBox(width: AppConstants.defaultPadding),
+            SizedBox(height: DesignSystem.spacingSmall),
+            
+            // Mini heat map
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    habit.name,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
+              child: GridView.builder(
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 7,
+                  crossAxisSpacing: 2,
+                  mainAxisSpacing: 2,
+                ),
+                itemCount: daysInMonth,
+                itemBuilder: (context, dayIndex) {
+                  final day = dayIndex + 1;
+                  final date = DateTime(_selectedMonth.year, month, day);
+                  final dateKey = _formatDateKey(date);
+                  final completions = _completionsByDate[dateKey] ?? [];
+                  
+                  return Container(
+                    decoration: BoxDecoration(
+                      color: completions.isEmpty
+                          ? context.secondaryTextColor.withOpacity(0.1)
+                          : DesignSystem.success.withOpacity(
+                              (completions.length / _habits.length).clamp(0.3, 1.0)
+                            ),
+                      borderRadius: BorderRadius.circular(2),
                     ),
-                  ),
-                  Text(
-                    '$completionCount / ${habit.targetCount} completed',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: isCompleted ? Colors.green : Colors.grey[600],
-                    ),
-                  ),
-                  const SizedBox(height: AppConstants.smallPadding),
-                  // Mini progress grid
-                  CompactProgressGrid(
-                    habitId: habit.id!,
-                    habitColor: habitColor,
-                    targetCount: habit.targetCount,
-                    days: 7,
-                  ),
-                ],
+                  );
+                },
               ),
-            ),
-            IconButton(
-              onPressed: () => _toggleHabitForDate(habit),
-              icon: Icon(
-                isCompleted ? Icons.check_circle : Icons.add_circle_outline,
-                color: isCompleted ? Colors.green : habitColor,
-              ),
-              tooltip: isCompleted ? 'Completed' : 'Mark complete',
             ),
           ],
         ),
@@ -410,16 +491,58 @@ class _CalendarScreenState extends State<CalendarScreen> {
     );
   }
 
-  Future<int> _getCompletedHabitsForDate(DateTime date) async {
-    if (_habits.isEmpty) return 0;
-    
-    int completed = 0;
-    for (final habit in _habits) {
-      final entry = await _databaseHelper.getHabitEntryForDate(habit.id!, date);
-      if (entry != null && entry.isCompleted(habit.targetCount)) {
-        completed++;
-      }
-    }
-    return completed;
+  Widget _buildHabitLegend() {
+    return Container(
+      padding: EdgeInsets.all(DesignSystem.spacingMedium),
+      decoration: BoxDecoration(
+        color: context.surfaceColor,
+        borderRadius: BorderRadius.circular(DesignSystem.cardBorderRadius),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Habits',
+            style: DesignSystem.headline.copyWith(
+              color: context.textColor,
+            ),
+          ),
+          SizedBox(height: DesignSystem.spacingMedium),
+          
+          ...(_habits.map((habit) {
+            final color = DesignSystem.getHabitColor(habit.color);
+            return Padding(
+              padding: EdgeInsets.only(bottom: DesignSystem.spacingSmall),
+              child: Row(
+                children: [
+                  Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: color,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  SizedBox(width: DesignSystem.spacingSmall),
+                  Text(
+                    habit.name,
+                    style: DesignSystem.body.copyWith(
+                      color: context.textColor,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }).toList()),
+        ],
+      ),
+    );
+  }
+
+  bool _isToday(DateTime date) {
+    final now = DateTime.now();
+    return date.year == now.year &&
+           date.month == now.month &&
+           date.day == now.day;
   }
 }
