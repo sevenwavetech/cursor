@@ -76,8 +76,8 @@ class AppConstants {
   ];
 
   // Frequencies
-  static const List<String> frequencies = ['daily', 'weekly', 'monthly'];
-  static const List<String> frequencyLabels = ['Daily', 'Weekly', 'Monthly'];
+  static const List<String> frequencies = ['daily', 'weekly', 'custom'];
+  static const List<String> frequencyLabels = ['Daily', 'Weekly', 'Custom'];
 
   // App Settings
   static const String appName = 'HabitTracker Pro';
@@ -106,12 +106,9 @@ class AppConstants {
   static const double tileSize = 32.0;
   static const double tileSpacing = 4.0;
 
-  // Streak Colors
-  static const Color streakColor1 = Color(0xFFE5E7EB); // Light gray
-  static const Color streakColor2 = Color(0xFFC3F0CA); // Light green
-  static const Color streakColor3 = Color(0xFF86EFAC); // Medium green
-  static const Color streakColor4 = Color(0xFF4ADE80); // Green
-  static const Color streakColor5 = Color(0xFF16A34A); // Dark green
+  // Completion Colors (GitHub-style)
+  static const Color noCompletionColor = Color(0xFFE5E7EB); // Light gray
+  static const Color completionColor = Color(0xFF22C55E); // Green
 
   // Get color by name
   static Color getColorByName(String colorName) {
@@ -125,17 +122,8 @@ class AppConstants {
     return index != -1 ? habitIcons[index] : habitIcons[0];
   }
 
-  // Get streak color based on completion count
-  static Color getStreakColor(int completionCount, int targetCount) {
-    if (completionCount == 0) return streakColor1;
-    
-    final percentage = (completionCount / targetCount).clamp(0.0, 1.0);
-    
-    if (percentage >= 1.0) return streakColor5;
-    if (percentage >= 0.75) return streakColor4;
-    if (percentage >= 0.5) return streakColor3;
-    if (percentage >= 0.25) return streakColor2;
-    
-    return streakColor1;
+  // Get completion color (simplified for binary completion)
+  static Color getCompletionColor(bool isCompleted) {
+    return isCompleted ? completionColor : noCompletionColor;
   }
 }

@@ -1,24 +1,24 @@
 class Habit {
   final int? id;
   final String name;
-  final String description;
+  final String? description;
   final String color;
   final String icon;
+  final String frequency; // 'daily', 'weekly', 'custom'
+  final bool isArchived;
   final DateTime createdAt;
-  final bool isActive;
-  final String frequency; // daily, weekly, monthly
-  final int targetCount; // for habits that need multiple completions per day
+  final DateTime updatedAt;
   
   Habit({
     this.id,
     required this.name,
-    required this.description,
+    this.description,
     required this.color,
     required this.icon,
-    required this.createdAt,
-    this.isActive = true,
     this.frequency = 'daily',
-    this.targetCount = 1,
+    this.isArchived = false,
+    required this.createdAt,
+    required this.updatedAt,
   });
 
   Map<String, dynamic> toMap() {
@@ -28,10 +28,10 @@ class Habit {
       'description': description,
       'color': color,
       'icon': icon,
-      'createdAt': createdAt.millisecondsSinceEpoch,
-      'isActive': isActive ? 1 : 0,
       'frequency': frequency,
-      'targetCount': targetCount,
+      'is_archived': isArchived ? 1 : 0,
+      'created_at': createdAt.toIso8601String(),
+      'updated_at': updatedAt.toIso8601String(),
     };
   }
 
@@ -42,10 +42,10 @@ class Habit {
       description: map['description'],
       color: map['color'],
       icon: map['icon'],
-      createdAt: DateTime.fromMillisecondsSinceEpoch(map['createdAt']),
-      isActive: map['isActive'] == 1,
-      frequency: map['frequency'],
-      targetCount: map['targetCount'],
+      frequency: map['frequency'] ?? 'daily',
+      isArchived: (map['is_archived'] ?? 0) == 1,
+      createdAt: DateTime.parse(map['created_at']),
+      updatedAt: DateTime.parse(map['updated_at']),
     );
   }
 
@@ -55,10 +55,10 @@ class Habit {
     String? description,
     String? color,
     String? icon,
-    DateTime? createdAt,
-    bool? isActive,
     String? frequency,
-    int? targetCount,
+    bool? isArchived,
+    DateTime? createdAt,
+    DateTime? updatedAt,
   }) {
     return Habit(
       id: id ?? this.id,
@@ -66,10 +66,44 @@ class Habit {
       description: description ?? this.description,
       color: color ?? this.color,
       icon: icon ?? this.icon,
-      createdAt: createdAt ?? this.createdAt,
-      isActive: isActive ?? this.isActive,
       frequency: frequency ?? this.frequency,
-      targetCount: targetCount ?? this.targetCount,
+      isArchived: isArchived ?? this.isArchived,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
     );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    
+    return other is Habit &&
+      other.id == id &&
+      other.name == name &&
+      other.description == description &&
+      other.color == color &&
+      other.icon == icon &&
+      other.frequency == frequency &&
+      other.isArchived == isArchived &&
+      other.createdAt == createdAt &&
+      other.updatedAt == updatedAt;
+  }
+
+  @override
+  int get hashCode {
+    return id.hashCode ^
+      name.hashCode ^
+      description.hashCode ^
+      color.hashCode ^
+      icon.hashCode ^
+      frequency.hashCode ^
+      isArchived.hashCode ^
+      createdAt.hashCode ^
+      updatedAt.hashCode;
+  }
+
+  @override
+  String toString() {
+    return 'Habit{id: $id, name: $name, description: $description, color: $color, icon: $icon, frequency: $frequency, isArchived: $isArchived, createdAt: $createdAt, updatedAt: $updatedAt}';
   }
 }

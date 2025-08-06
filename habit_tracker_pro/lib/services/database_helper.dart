@@ -1,7 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import '../models/habit.dart';
-import '../models/habit_entry.dart';
+import '../models/completion.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper _instance = DatabaseHelper._internal();
@@ -33,53 +33,57 @@ class DatabaseHelper {
     await db.execute('''
       CREATE TABLE habits(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        description TEXT NOT NULL,
+        name TEXT NOT NULL CHECK(length(name) <= 30),
+        description TEXT,
         color TEXT NOT NULL,
         icon TEXT NOT NULL,
-        createdAt INTEGER NOT NULL,
-        isActive INTEGER NOT NULL DEFAULT 1,
-        frequency TEXT NOT NULL DEFAULT 'daily',
-        targetCount INTEGER NOT NULL DEFAULT 1
+        frequency TEXT NOT NULL DEFAULT 'daily' CHECK(frequency IN ('daily', 'weekly', 'custom')),
+        is_archived INTEGER NOT NULL DEFAULT 0 CHECK(is_archived IN (0, 1)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
       )
     ''');
 
-    // Create habit_entries table
+    // Create completions table
     await db.execute('''
-      CREATE TABLE habit_entries(
+      CREATE TABLE completions(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        habitId INTEGER NOT NULL,
-        date INTEGER NOT NULL,
-        completionCount INTEGER NOT NULL DEFAULT 0,
-        notes TEXT,
-        createdAt INTEGER NOT NULL,
-        FOREIGN KEY (habitId) REFERENCES habits (id) ON DELETE CASCADE,
-        UNIQUE(habitId, date)
+        habit_id INTEGER NOT NULL,
+        completion_date TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (habit_id) REFERENCES habits (id) ON DELETE CASCADE,
+        UNIQUE(habit_id, completion_date)
       )
     ''');
 
-    // Create index for faster queries
-    await db.execute('CREATE INDEX idx_habit_entries_date ON habit_entries(date)');
-    await db.execute('CREATE INDEX idx_habit_entries_habit_id ON habit_entries(habitId)');
+    // Create indexes for better performance
+    await db.execute('CREATE INDEX idx_habits_is_archived ON habits(is_archived)');
+    await db.execute('CREATE INDEX idx_completions_habit_id ON completions(habit_id)');
+    await db.execute('CREATE INDEX idx_completions_date ON completions(completion_date)');
+    await db.execute('CREATE INDEX idx_completions_habit_date ON completions(habit_id, completion_date)');
   }
 
-  // Habit CRUD operations
+  // HABIT CRUD OPERATIONS
+
+  /// Insert a new habit into the database
   Future<int> insertHabit(Habit habit) async {
     final db = await database;
     return await db.insert('habits', habit.toMap());
   }
 
-  Future<List<Habit>> getAllHabits() async {
+  /// Get all habits (non-archived by default)
+  Future<List<Habit>> getAllHabits({bool includeArchived = false}) async {
     final db = await database;
     final List<Map<String, dynamic>> maps = await db.query(
       'habits',
-      where: 'isActive = ?',
-      whereArgs: [1],
-      orderBy: 'createdAt DESC',
+      where: includeArchived ? null : 'is_archived = ?',
+      whereArgs: includeArchived ? null : [0],
+      orderBy: 'created_at DESC',
     );
     return List.generate(maps.length, (i) => Habit.fromMap(maps[i]));
   }
 
+  /// Get a specific habit by ID
   Future<Habit?> getHabit(int id) async {
     final db = await database;
     final List<Map<String, dynamic>> maps = await db.query(
@@ -93,175 +97,285 @@ class DatabaseHelper {
     return null;
   }
 
+  /// Update an existing habit
   Future<int> updateHabit(Habit habit) async {
     final db = await database;
+    final updatedHabit = habit.copyWith(updatedAt: DateTime.now());
     return await db.update(
       'habits',
-      habit.toMap(),
+      updatedHabit.toMap(),
       where: 'id = ?',
       whereArgs: [habit.id],
     );
   }
 
+  /// Permanently delete a habit and all its completions
   Future<int> deleteHabit(int id) async {
     final db = await database;
-    return await db.update(
+    return await db.delete(
       'habits',
-      {'isActive': 0},
       where: 'id = ?',
       whereArgs: [id],
     );
   }
 
-  // HabitEntry CRUD operations
-  Future<int> insertHabitEntry(HabitEntry entry) async {
+  /// Archive/unarchive a habit
+  Future<int> archiveHabit(int id, {bool archive = true}) async {
+    final db = await database;
+    return await db.update(
+      'habits',
+      {
+        'is_archived': archive ? 1 : 0,
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  // COMPLETION CRUD OPERATIONS
+
+  /// Insert a new completion
+  Future<int> insertCompletion(Completion completion) async {
     final db = await database;
     return await db.insert(
-      'habit_entries',
-      entry.toMap(),
+      'completions',
+      completion.toMap(),
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
   }
 
-  Future<List<HabitEntry>> getHabitEntries(int habitId, {DateTime? startDate, DateTime? endDate}) async {
+  /// Get all completions for a specific habit
+  Future<List<Completion>> getCompletionsForHabit(
+    int habitId, {
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
     final db = await database;
-    String whereClause = 'habitId = ?';
+    String whereClause = 'habit_id = ?';
     List<dynamic> whereArgs = [habitId];
 
     if (startDate != null) {
-      whereClause += ' AND date >= ?';
-      whereArgs.add(startDate.millisecondsSinceEpoch);
+      whereClause += ' AND completion_date >= ?';
+      whereArgs.add(_formatDateOnly(startDate));
     }
 
     if (endDate != null) {
-      whereClause += ' AND date <= ?';
-      whereArgs.add(endDate.millisecondsSinceEpoch);
+      whereClause += ' AND completion_date <= ?';
+      whereArgs.add(_formatDateOnly(endDate));
     }
 
     final List<Map<String, dynamic>> maps = await db.query(
-      'habit_entries',
+      'completions',
       where: whereClause,
       whereArgs: whereArgs,
-      orderBy: 'date DESC',
+      orderBy: 'completion_date DESC',
     );
 
-    return List.generate(maps.length, (i) => HabitEntry.fromMap(maps[i]));
+    return List.generate(maps.length, (i) => Completion.fromMap(maps[i]));
   }
 
-  Future<HabitEntry?> getHabitEntryForDate(int habitId, DateTime date) async {
+  /// Get completion for a specific habit on a specific date
+  Future<Completion?> getCompletionForDate(int habitId, DateTime date) async {
     final db = await database;
-    final dateOnly = DateTime(date.year, date.month, date.day);
+    final dateStr = _formatDateOnly(date);
     
     final List<Map<String, dynamic>> maps = await db.query(
-      'habit_entries',
-      where: 'habitId = ? AND date = ?',
-      whereArgs: [habitId, dateOnly.millisecondsSinceEpoch],
+      'completions',
+      where: 'habit_id = ? AND completion_date = ?',
+      whereArgs: [habitId, dateStr],
     );
 
     if (maps.isNotEmpty) {
-      return HabitEntry.fromMap(maps.first);
+      return Completion.fromMap(maps.first);
     }
     return null;
   }
 
-  Future<int> updateHabitEntry(HabitEntry entry) async {
-    final db = await database;
-    return await db.update(
-      'habit_entries',
-      entry.toMap(),
-      where: 'id = ?',
-      whereArgs: [entry.id],
-    );
-  }
-
-  Future<int> deleteHabitEntry(int id) async {
+  /// Delete a specific completion
+  Future<int> deleteCompletion(int id) async {
     final db = await database;
     return await db.delete(
-      'habit_entries',
+      'completions',
       where: 'id = ?',
       whereArgs: [id],
     );
   }
 
-  // Analytics and statistics
-  Future<int> getStreakCount(int habitId) async {
+  /// Delete completion for a specific habit on a specific date
+  Future<int> deleteCompletionForDate(int habitId, DateTime date) async {
+    final db = await database;
+    final dateStr = _formatDateOnly(date);
+    return await db.delete(
+      'completions',
+      where: 'habit_id = ? AND completion_date = ?',
+      whereArgs: [habitId, dateStr],
+    );
+  }
+
+  // ANALYTICS AND STATISTICS
+
+  /// Calculate current streak for a habit
+  Future<int> getStreakForHabit(int habitId) async {
     final db = await database;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     
-    // Get habit to check target count
-    final habit = await getHabit(habitId);
-    if (habit == null) return 0;
-
-    int streakCount = 0;
+    // Get all completions for this habit, ordered by date descending
+    final completions = await getCompletionsForHabit(habitId);
+    
+    if (completions.isEmpty) return 0;
+    
+    int streak = 0;
     DateTime checkDate = today;
-
-    while (true) {
-      final entry = await getHabitEntryForDate(habitId, checkDate);
-      if (entry != null && entry.isCompleted(habit.targetCount)) {
-        streakCount++;
-        checkDate = checkDate.subtract(const Duration(days: 1));
-      } else {
-        break;
-      }
+    
+    // Convert completions to a set of dates for faster lookup
+    final completionDates = completions
+        .map((c) => DateTime(c.completionDate.year, c.completionDate.month, c.completionDate.day))
+        .toSet();
+    
+    // Count consecutive days from today backwards
+    while (completionDates.contains(checkDate)) {
+      streak++;
+      checkDate = checkDate.subtract(const Duration(days: 1));
     }
-
-    return streakCount;
+    
+    return streak;
   }
 
-  Future<Map<String, dynamic>> getHabitStats(int habitId, {int days = 30}) async {
-    final now = DateTime.now();
-    final startDate = DateTime(now.year, now.month, now.day).subtract(Duration(days: days - 1));
-    final endDate = DateTime(now.year, now.month, now.day);
-
-    final entries = await getHabitEntries(habitId, startDate: startDate, endDate: endDate);
-    final habit = await getHabit(habitId);
+  /// Calculate completion rate for a habit over a specified period
+  Future<double> getCompletionRateForHabit(
+    int habitId, {
+    int days = 30,
+  }) async {
+    final endDate = DateTime.now();
+    final startDate = endDate.subtract(Duration(days: days - 1));
     
-    if (habit == null) {
-      return {'completionRate': 0.0, 'totalCompletions': 0, 'streak': 0};
-    }
+    final completions = await getCompletionsForHabit(
+      habitId,
+      startDate: startDate,
+      endDate: endDate,
+    );
+    
+    if (days == 0) return 0.0;
+    
+    return (completions.length / days) * 100;
+  }
 
-    int completedDays = 0;
-    int totalCompletions = 0;
-
-    for (final entry in entries) {
-      if (entry.isCompleted(habit.targetCount)) {
-        completedDays++;
-      }
-      totalCompletions += entry.completionCount;
-    }
-
-    final completionRate = (completedDays / days) * 100;
-    final streak = await getStreakCount(habitId);
-
+  /// Get habit statistics
+  Future<Map<String, dynamic>> getHabitStats(int habitId, {int days = 30}) async {
+    final completions = await getCompletionsForHabit(habitId);
+    final streak = await getStreakForHabit(habitId);
+    final completionRate = await getCompletionRateForHabit(habitId, days: days);
+    
     return {
+      'totalCompletions': completions.length,
+      'currentStreak': streak,
       'completionRate': completionRate,
-      'totalCompletions': totalCompletions,
-      'streak': streak,
-      'completedDays': completedDays,
+      'completionsInPeriod': completions
+          .where((c) => c.completionDate.isAfter(
+              DateTime.now().subtract(Duration(days: days))))
+          .length,
     };
   }
 
-  // Get all entries for a specific date (for calendar view)
-  Future<List<Map<String, dynamic>>> getEntriesForDate(DateTime date) async {
+  /// Get all habits with their completion status for a specific date
+  Future<List<Map<String, dynamic>>> getHabitsWithCompletionForDate(DateTime date) async {
     final db = await database;
-    final dateOnly = DateTime(date.year, date.month, date.day);
+    final dateStr = _formatDateOnly(date);
 
     final List<Map<String, dynamic>> result = await db.rawQuery('''
-      SELECT h.*, e.completionCount, e.notes, e.id as entryId
+      SELECT h.*, 
+             c.id as completion_id,
+             c.completion_date,
+             c.created_at as completion_created_at,
+             CASE WHEN c.id IS NOT NULL THEN 1 ELSE 0 END as is_completed
       FROM habits h
-      LEFT JOIN habit_entries e ON h.id = e.habitId AND e.date = ?
-      WHERE h.isActive = 1
-      ORDER BY h.createdAt DESC
-    ''', [dateOnly.millisecondsSinceEpoch]);
+      LEFT JOIN completions c ON h.id = c.habit_id AND c.completion_date = ?
+      WHERE h.is_archived = 0
+      ORDER BY h.created_at DESC
+    ''', [dateStr]);
 
     return result;
   }
 
+  /// Get completion count for each day in a date range
+  Future<Map<String, int>> getCompletionCountsByDate(
+    DateTime startDate,
+    DateTime endDate,
+  ) async {
+    final db = await database;
+    final startDateStr = _formatDateOnly(startDate);
+    final endDateStr = _formatDateOnly(endDate);
+
+    final List<Map<String, dynamic>> result = await db.rawQuery('''
+      SELECT completion_date, COUNT(*) as count
+      FROM completions c
+      JOIN habits h ON c.habit_id = h.id
+      WHERE h.is_archived = 0 
+        AND completion_date >= ? 
+        AND completion_date <= ?
+      GROUP BY completion_date
+      ORDER BY completion_date
+    ''', [startDateStr, endDateStr]);
+
+    final Map<String, int> counts = {};
+    for (final row in result) {
+      counts[row['completion_date']] = row['count'];
+    }
+    return counts;
+  }
+
+  /// Get overall app statistics
+  Future<Map<String, dynamic>> getOverallStats() async {
+    final db = await database;
+    
+    final habitsCount = Sqflite.firstIntValue(await db.rawQuery(
+      'SELECT COUNT(*) FROM habits WHERE is_archived = 0'
+    )) ?? 0;
+    
+    final archivedHabitsCount = Sqflite.firstIntValue(await db.rawQuery(
+      'SELECT COUNT(*) FROM habits WHERE is_archived = 1'
+    )) ?? 0;
+    
+    final totalCompletions = Sqflite.firstIntValue(await db.rawQuery(
+      'SELECT COUNT(*) FROM completions c JOIN habits h ON c.habit_id = h.id WHERE h.is_archived = 0'
+    )) ?? 0;
+    
+    final todayCompletions = Sqflite.firstIntValue(await db.rawQuery(
+      'SELECT COUNT(*) FROM completions c JOIN habits h ON c.habit_id = h.id WHERE h.is_archived = 0 AND c.completion_date = ?',
+      [_formatDateOnly(DateTime.now())]
+    )) ?? 0;
+    
+    return {
+      'activeHabits': habitsCount,
+      'archivedHabits': archivedHabitsCount,
+      'totalCompletions': totalCompletions,
+      'todayCompletions': todayCompletions,
+    };
+  }
+
+  // UTILITY METHODS
+
+  /// Format date as YYYY-MM-DD string
+  String _formatDateOnly(DateTime date) {
+    return '${date.year.toString().padLeft(4, '0')}-'
+           '${date.month.toString().padLeft(2, '0')}-'
+           '${date.day.toString().padLeft(2, '0')}';
+  }
+
+  /// Close database connection
   Future<void> close() async {
     if (_database != null) {
       await _database!.close();
       _database = null;
     }
+  }
+
+  /// Reset database (for testing purposes)
+  Future<void> deleteDatabase() async {
+    String path = join(await getDatabasesPath(), 'habit_tracker.db');
+    await databaseFactory.deleteDatabase(path);
+    _database = null;
   }
 }
